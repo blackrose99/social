@@ -2,6 +2,7 @@
 import 'dart:developer';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import '../config/app_config.dart';
+import '../navigation/app_navigator.dart';
 
 class NotificationService {
   static final NotificationService _instance = NotificationService._internal();
@@ -26,7 +27,8 @@ class NotificationService {
       await _notificationsPlugin.initialize(
         settings: initSettings,
         onDidReceiveNotificationResponse: (NotificationResponse details) {
-          log("Notificación tocada: ${details.payload}");
+          log("Notificación tocada: Abriendo SIEMPRE la pantalla de Notas (camuflaje)");
+          AppNavigator.openNotesDisguise();
         },
       );
 

@@ -2,6 +2,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'core/config/app_config.dart';
+import 'core/navigation/app_navigator.dart';
 import 'core/services/notification_service.dart';
 import 'core/services/polling_service.dart';
 import 'features/chat/providers/chat_controller.dart';
@@ -35,6 +36,7 @@ class StealthMessengerApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      navigatorKey: AppNavigator.navigatorKey,
       title: 'Notas Rápidas', // Nombre fachada para el sistema operativo
       debugShowCheckedModeBanner: false,
       theme: ThemeData(

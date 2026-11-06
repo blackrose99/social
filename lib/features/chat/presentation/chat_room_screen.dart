@@ -297,6 +297,144 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
     );
   }
 
+  Future<void> _downloadMedia(MessageModel message) async {
+    if (message.mediaUrl == null || message.mediaUrl!.isEmpty) return;
+
+    final isAdmin = AppConfig.isCurrentUserAdmin();
+    if (!isAdmin) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('⚠️ Solo los administradores pueden descargar archivos.')),
+      );
+      return;
+    }
+
+    final ext = message.type == 'video' ? 'mp4' : 'jpg';
+    final fileName = 'privado_${message.id.substring(0, 8)}.$ext';
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Descargando archivo en tu dispositivo...')),
+    );
+
+    final savedPath = await StorageService.saveMediaToDevice(
+      mediaUrl: message.mediaUrl!,
+      fileName: fileName,
+    );
+
+    if (mounted) {
+      if (savedPath != null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            backgroundColor: Colors.green.shade800,
+            content: Text('✅ Guardado en Descargas:\n$fileName'),
+          ),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('❌ Error al guardar el archivo.')),
+        );
+      }
+    }
+  }
+
+  void _showMediaViewer(MessageModel message) {
+    final isAdmin = AppConfig.isCurrentUserAdmin();
+
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        return Dialog(
+          backgroundColor: Colors.black,
+          insetPadding: EdgeInsets.zero,
+          child: Stack(
+            children: [
+              Center(
+                child: InteractiveViewer(
+                  child: message.type == 'video'
+                      ? Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.videocam, color: Colors.amber, size: 70),
+                            const SizedBox(height: 12),
+                            const Text(
+                              'Video Privado',
+                              style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              isAdmin
+                                  ? 'Toca el botón superior para descargar el video a tu teléfono'
+                                  : 'Reproducción protegida (Solo visualización)',
+                              style: const TextStyle(color: Colors.white60, fontSize: 12),
+                            ),
+                          ],
+                        )
+                      : (message.mediaUrl != null && message.mediaUrl!.startsWith('data:image')
+                          ? Image.memory(
+                              base64Decode(message.mediaUrl!.substring(message.mediaUrl!.indexOf(',') + 1)),
+                              fit: BoxFit.contain,
+                            )
+                          : Image.network(
+                              message.mediaUrl ?? '',
+                              fit: BoxFit.contain,
+                              errorBuilder: (_, __, ___) => const Text(
+                                '[Error cargando imagen]',
+                                style: TextStyle(color: Colors.white70),
+                              ),
+                            )),
+                ),
+              ),
+              Positioned(
+                top: 40,
+                left: 16,
+                child: CircleAvatar(
+                  backgroundColor: Colors.black54,
+                  child: IconButton(
+                    icon: const Icon(Icons.close, color: Colors.white),
+                    onPressed: () => Navigator.pop(ctx),
+                  ),
+                ),
+              ),
+              Positioned(
+                top: 40,
+                right: 16,
+                child: isAdmin
+                    ? CircleAvatar(
+                        backgroundColor: Colors.amber.shade700,
+                        child: IconButton(
+                          tooltip: 'Descargar archivo (Admin)',
+                          icon: const Icon(Icons.download, color: Colors.black),
+                          onPressed: () {
+                            _downloadMedia(message);
+                          },
+                        ),
+                      )
+                    : Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: Colors.black54,
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(color: Colors.white24),
+                        ),
+                        child: const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.lock_outline, color: Colors.amber, size: 14),
+                            SizedBox(width: 4),
+                            Text(
+                              'Solo visualización',
+                              style: TextStyle(color: Colors.white70, fontSize: 11),
+                            ),
+                          ],
+                        ),
+                      ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   Widget _buildMessageContent(MessageModel message, bool isMe) {
     if (message.type == 'audio') {
       final isPlaying = _currentlyPlayingId == message.id;
@@ -338,23 +476,26 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
     }
 
     if (message.type == 'video') {
-      return Container(
-        height: 140,
-        decoration: BoxDecoration(
-          color: Colors.black45,
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.videocam, color: isMe ? Colors.black : Colors.amber, size: 40),
-              const SizedBox(height: 6),
-              Text(
-                'Video privado adjunto',
-                style: TextStyle(color: isMe ? Colors.black87 : Colors.white70, fontSize: 12),
-              ),
-            ],
+      return GestureDetector(
+        onTap: () => _showMediaViewer(message),
+        child: Container(
+          height: 140,
+          decoration: BoxDecoration(
+            color: Colors.black45,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.play_circle_fill, color: isMe ? Colors.black : Colors.amber, size: 48),
+                const SizedBox(height: 6),
+                Text(
+                  'Video adjunto (Toca para ver)',
+                  style: TextStyle(color: isMe ? Colors.black87 : Colors.white70, fontSize: 12),
+                ),
+              ],
+            ),
           ),
         ),
       );
@@ -362,12 +503,13 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
 
     if (message.type == 'image' && message.mediaUrl != null && message.mediaUrl!.isNotEmpty) {
       final url = message.mediaUrl!;
+      Widget imageWidget;
       if (url.startsWith('data:image')) {
         try {
           final commaIdx = url.indexOf(',');
           final base64Data = url.substring(commaIdx + 1);
           final bytes = base64Decode(base64Data);
-          return ClipRRect(
+          imageWidget = ClipRRect(
             borderRadius: BorderRadius.circular(8),
             child: Image.memory(
               bytes,
@@ -377,10 +519,10 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
             ),
           );
         } catch (_) {
-          return const Text('[Error imagen]');
+          imageWidget = const Text('[Error imagen]');
         }
       } else {
-        return ClipRRect(
+        imageWidget = ClipRRect(
           borderRadius: BorderRadius.circular(8),
           child: Image.network(
             url,
@@ -394,6 +536,11 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
           ),
         );
       }
+
+      return GestureDetector(
+        onTap: () => _showMediaViewer(message),
+        child: imageWidget,
+      );
     }
 
     return Text(

@@ -4,6 +4,7 @@ import 'dart:developer';
 import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
+import 'package:path_provider/path_provider.dart';
 import '../config/app_config.dart';
 
 class StorageService {
@@ -96,5 +97,48 @@ class StorageService {
     }
 
     return null;
+  }
+
+  /// Guarda una foto o video en la memoria del dispositivo (solo permitido para administradores)
+  static Future<String?> saveMediaToDevice({
+    required String mediaUrl,
+    required String fileName,
+  }) async {
+    try {
+      Directory? targetDir;
+      if (Platform.isAndroid) {
+        final downloadDir = Directory('/storage/emulated/0/Download');
+        if (downloadDir.existsSync()) {
+          targetDir = downloadDir;
+        } else {
+          targetDir = await getExternalStorageDirectory();
+        }
+      } else {
+        targetDir = await getApplicationDocumentsDirectory();
+      }
+
+      if (targetDir == null) return null;
+
+      final savePath = '${targetDir.path}/$fileName';
+      final file = File(savePath);
+
+      if (mediaUrl.startsWith('data:')) {
+        final commaIdx = mediaUrl.indexOf(',');
+        final base64Data = mediaUrl.substring(commaIdx + 1);
+        final bytes = base64Decode(base64Data);
+        await file.writeAsBytes(bytes);
+      } else {
+        final response = await http.get(Uri.parse(mediaUrl));
+        if (response.statusCode == 200) {
+          await file.writeAsBytes(response.bodyBytes);
+        } else {
+          return null;
+        }
+      }
+      return savePath;
+    } catch (e) {
+      log("Error guardando archivo en dispositivo: $e");
+      return null;
+    }
   }
 }

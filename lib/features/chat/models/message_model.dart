@@ -7,6 +7,7 @@ class MessageModel {
   final String type; // 'text', 'image', 'video', 'audio'
   final String? mediaUrl;
   final DateTime timestamp;
+  final DateTime? expiresAt;
 
   MessageModel({
     required this.id,
@@ -16,6 +17,7 @@ class MessageModel {
     this.type = 'text',
     this.mediaUrl,
     required this.timestamp,
+    this.expiresAt,
   });
 
   Map<String, dynamic> toMap() {
@@ -27,6 +29,7 @@ class MessageModel {
       'type': type,
       'media_url': mediaUrl,
       'timestamp': timestamp.toIso8601String(),
+      'expires_at': expiresAt?.toIso8601String(),
     };
   }
 
@@ -39,6 +42,7 @@ class MessageModel {
       type: map['type'] ?? 'text',
       mediaUrl: map['media_url'],
       timestamp: DateTime.tryParse(map['timestamp'] ?? '') ?? DateTime.now(),
+      expiresAt: DateTime.tryParse(map['expires_at'] ?? ''),
     );
   }
 }

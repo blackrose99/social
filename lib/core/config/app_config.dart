@@ -11,17 +11,39 @@ class AppConfig {
   static const String defaultSecretTrigger = "#open7788";
 
   // Claves de SharedPreferences
+  static const String _prefDbUser = 'db_user';
   static const String _prefDbPassword = 'db_password';
   static const String _prefSecretTrigger = 'secret_trigger';
   static const String _prefCurrentUsername = 'current_username';
   static const String _prefStealthNotifications = 'stealth_notifications';
   static const String _prefCloudinaryCloud = 'cloudinary_cloud';
   static const String _prefCloudinaryPreset = 'cloudinary_preset';
+  static const String _prefRetentionDays = 'retention_days';
+  static const int defaultRetentionDays = 7;
+  static const List<String> adminUsernames = ['mannu', 'lmc', 'luis'];
+
+  static bool isCurrentUserAdmin() {
+    final current = getCurrentUsername()?.toLowerCase().trim();
+    if (current == null || current.isEmpty) return false;
+    return adminUsernames.contains(current);
+  }
 
   static SharedPreferences? _prefs;
 
   static Future<void> init() async {
     _prefs = await SharedPreferences.getInstance();
+  }
+
+  static String getDbUser() {
+    final saved = _prefs?.getString(_prefDbUser);
+    if (saved != null && saved.trim().isNotEmpty) {
+      return saved.trim();
+    }
+    return defaultUser;
+  }
+
+  static Future<void> setDbUser(String user) async {
+    await _prefs?.setString(_prefDbUser, user.trim());
   }
 
   static String getDbPassword() {
@@ -77,9 +99,19 @@ class AppConfig {
     return _prefs?.getString(_prefCloudinaryPreset) ?? "unsigned_preset";
   }
 
-  static String buildMongoUri([String? password]) {
+  static int getRetentionDays() {
+    return _prefs?.getInt(_prefRetentionDays) ?? defaultRetentionDays;
+  }
+
+  static Future<void> setRetentionDays(int days) async {
+    final clamped = days.clamp(1, 7);
+    await _prefs?.setInt(_prefRetentionDays, clamped);
+  }
+
+  static String buildMongoUri([String? password, String? username]) {
+    final user = username ?? getDbUser();
     final pwd = password ?? getDbPassword();
     final encodedPwd = Uri.encodeComponent(pwd);
-    return "mongodb+srv://$defaultUser:$encodedPwd@$defaultClusterHost/$defaultDbName?retryWrites=true&w=majority";
+    return "mongodb+srv://$user:$encodedPwd@$defaultClusterHost/$defaultDbName?retryWrites=true&w=majority";
   }
 }

@@ -25,10 +25,11 @@ class MongoService {
   DbCollection get messagesCollection => db.collection('messages');
 
   /// Inicializa la conexión con MongoDB Atlas
-  Future<bool> connect([String? customPassword]) async {
+  Future<bool> connect([String? customPassword, String? customUser]) async {
     final password = customPassword ?? AppConfig.getDbPassword();
-    if (password.trim().isEmpty) {
-      log("MongoDB: No hay contraseña configurada.");
+    final user = customUser ?? AppConfig.getDbUser();
+    if (password.trim().isEmpty || user.trim().isEmpty) {
+      log("MongoDB: Credenciales incompletas.");
       return false;
     }
 
@@ -37,7 +38,7 @@ class MongoService {
         await _db!.close();
       }
 
-      final uri = AppConfig.buildMongoUri(password);
+      final uri = AppConfig.buildMongoUri(password, user);
       log("MongoDB: Conectando a Atlas...");
       _db = await Db.create(uri);
       await _db!.open();

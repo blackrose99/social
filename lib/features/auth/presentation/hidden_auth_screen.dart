@@ -1,6 +1,6 @@
 // lib/features/auth/presentation/hidden_auth_screen.dart
 import 'package:flutter/material.dart';
-import 'package:mongo_dart/mongo_dart.dart' hide Center;
+import 'package:mongo_dart/mongo_dart.dart' hide State, Center;
 import 'package:uuid/uuid.dart';
 import '../../../core/config/app_config.dart';
 import '../../../core/services/mongo_service.dart';

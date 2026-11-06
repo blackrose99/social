@@ -5,12 +5,14 @@ import 'package:flutter/foundation.dart';
 import 'package:mongo_dart/mongo_dart.dart';
 import 'package:uuid/uuid.dart';
 import '../../../core/config/app_config.dart';
+import '../../../core/services/local_cache_service.dart';
 import '../../../core/services/mongo_service.dart';
 import '../models/conversation_model.dart';
 import '../models/message_model.dart';
 
 class ChatController extends ChangeNotifier {
   final MongoService _mongo = MongoService();
+  final LocalCacheService _cache = LocalCacheService();
 
   List<ConversationModel> _conversations = [];
   List<ConversationModel> get conversations => _conversations;
@@ -27,15 +29,36 @@ class ChatController extends ChangeNotifier {
   StreamSubscription? _changeStreamSub;
   Timer? _activeRoomPollingTimer;
 
-  /// Carga las conversaciones del usuario actual
+  /// Limpia automáticamente de la base de datos mensajes y multimedia vencidos
+  Future<void> _cleanExpiredMessages() async {
+    try {
+      if (!_mongo.isConnected) return;
+      final nowStr = DateTime.now().toIso8601String();
+      await _mongo.messagesCollection.deleteMany(
+        where.lt('expires_at', nowStr),
+      );
+    } catch (_) {}
+  }
+
+  /// Carga las conversaciones del usuario actual (primero de caché local, luego de Atlas)
   Future<void> loadConversations() async {
     final currentUsername = AppConfig.getCurrentUsername();
     if (currentUsername == null || currentUsername.isEmpty) return;
+
+    // 1. Mostrar de inmediato desde caché persistente local
+    final cached = await _cache.getCachedConversations();
+    if (cached.isNotEmpty && _conversations.isEmpty) {
+      _conversations = cached;
+      notifyListeners();
+    }
 
     try {
       if (!_mongo.isConnected) {
         await _mongo.connect();
       }
+
+      // Limpiar vencidos en Atlas (Atlas actúa como puente temporal)
+      _cleanExpiredMessages();
 
       final current = currentUsername.trim().toLowerCase();
 
@@ -47,6 +70,7 @@ class ChatController extends ChangeNotifier {
 
       final list = await cursor.toList();
       _conversations = list.map((doc) => ConversationModel.fromMap(doc)).toList();
+      await _cache.saveConversations(_conversations);
       notifyListeners();
     } catch (e) {
       log("Error cargando conversaciones: $e");
@@ -177,10 +201,14 @@ class ChatController extends ChangeNotifier {
   /// Abre la sala de chat y comienza a escuchar mensajes
   Future<void> enterChatRoom(String conversationId) async {
     _activeConversationId = conversationId;
-    _currentMessages = [];
-    _isLoading = true;
+
+    // 1. Cargar inmediatamente desde el almacenamiento local del dispositivo
+    final cached = await _cache.getCachedMessages(conversationId);
+    _currentMessages = cached;
+    _isLoading = cached.isEmpty;
     notifyListeners();
 
+    // 2. Traer mensajes nuevos desde Atlas (puente) y sincronizar
     await _fetchRoomMessages(conversationId);
     _isLoading = false;
     notifyListeners();
@@ -188,7 +216,7 @@ class ChatController extends ChangeNotifier {
     _startListeningRoomMessages(conversationId);
   }
 
-  /// Carga el historial inicial de la conversación
+  /// Carga y sincroniza mensajes desde el puente Atlas preservando el historial local
   Future<void> _fetchRoomMessages(String conversationId) async {
     try {
       if (!_mongo.isConnected) await _mongo.connect();
@@ -200,7 +228,10 @@ class ChatController extends ChangeNotifier {
       );
 
       final docs = await cursor.toList();
-      _currentMessages = docs.map((d) => MessageModel.fromMap(d)).toList();
+      final atlasMsgs = docs.map((d) => MessageModel.fromMap(d)).toList();
+
+      // Fusionar y persistir localmente en el teléfono
+      _currentMessages = await _cache.mergeAndSaveMessages(conversationId, atlasMsgs);
       notifyListeners();
     } catch (e) {
       log("Error obteniendo mensajes de la sala: $e");
@@ -223,12 +254,12 @@ class ChatController extends ChangeNotifier {
       ];
 
       final stream = _mongo.messagesCollection.watch(pipeline);
-      _changeStreamSub = stream.listen((event) {
+      _changeStreamSub = stream.listen((event) async {
         final fullDoc = event.fullDocument;
         if (fullDoc != null) {
           final newMsg = MessageModel.fromMap(fullDoc);
           if (!_currentMessages.any((m) => m.id == newMsg.id)) {
-            _currentMessages.add(newMsg);
+            _currentMessages = await _cache.mergeAndSaveMessages(conversationId, [newMsg]);
             notifyListeners();
           }
         }
@@ -249,8 +280,12 @@ class ChatController extends ChangeNotifier {
         );
 
         final newDocs = await cursor.toList();
-        if (newDocs.length != _currentMessages.length) {
-          _currentMessages = newDocs.map((doc) => MessageModel.fromMap(doc)).toList();
+        final atlasMsgs = newDocs.map((doc) => MessageModel.fromMap(doc)).toList();
+
+        // Si hay mensajes nuevos en Atlas, agregarlos y guardarlos en caché del teléfono
+        final hasNew = atlasMsgs.any((m) => !_currentMessages.any((cm) => cm.id == m.id));
+        if (hasNew) {
+          _currentMessages = await _cache.mergeAndSaveMessages(conversationId, atlasMsgs);
           notifyListeners();
         }
       } catch (e) {
@@ -284,6 +319,9 @@ class ChatController extends ChangeNotifier {
     if (currentUsername == null) return;
 
     final now = DateTime.now();
+    final retentionDays = AppConfig.getRetentionDays();
+    final expiresAt = now.add(Duration(days: retentionDays));
+
     final message = MessageModel(
       id: const Uuid().v4(),
       conversationId: conversationId,
@@ -292,10 +330,12 @@ class ChatController extends ChangeNotifier {
       type: type,
       mediaUrl: mediaUrl,
       timestamp: now,
+      expiresAt: expiresAt,
     );
 
-    // Añadir localmente de inmediato para sensación instantánea
+    // Añadir localmente de inmediato para sensación instantánea y guardar en caché local
     _currentMessages.add(message);
+    await _cache.saveSingleMessage(conversationId, message);
     notifyListeners();
 
     try {
