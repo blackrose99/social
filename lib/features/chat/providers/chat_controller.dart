@@ -60,11 +60,12 @@ class ChatController extends ChangeNotifier {
       // Limpiar vencidos en Atlas (Atlas actúa como puente temporal)
       _cleanExpiredMessages();
 
-      final current = currentUsername.trim().toLowerCase();
+      final current = currentUsername.replaceAll('@', '').trim().toLowerCase();
 
+      // Buscar conversaciones donde el usuario participe (soporta limpio y con @ por compatibilidad)
       final cursor = _mongo.conversationsCollection.find(
         where
-            .eq('participants', current)
+            .oneFrom('participants', [current, '@$current'])
             .sortBy('updated_at', descending: true),
       );
 
@@ -80,7 +81,7 @@ class ChatController extends ChangeNotifier {
     }
   }
 
-  /// Busca si existe un usuario registrado (soporta prefijos y quita arrobas)
+  /// Busca si existe un usuario registrado (soporta prefijos, mayúsculas y quita arrobas)
   Future<Map<String, dynamic>?> findUser(String username) async {
     final clean = username.replaceAll('@', '').trim().toLowerCase();
     if (clean.isEmpty) return null;
@@ -88,17 +89,25 @@ class ChatController extends ChangeNotifier {
     try {
       if (!_mongo.isConnected) await _mongo.connect();
 
-      // Búsqueda exacta
+      // 1. Búsqueda exacta limpia
       var user = await _mongo.usersCollection.findOne(
         where.eq('username', clean),
       );
 
-      // Si no coincide exacto, busca si empieza por ese texto (ej: "lm" encuentra "lmc")
-      if (user == null) {
-        user = await _mongo.usersCollection.findOne(
-          where.match('username', '^$clean'),
-        );
-      }
+      // 2. Búsqueda con @ por si se registró antiguamente con arroba
+      user ??= await _mongo.usersCollection.findOne(
+        where.eq('username', '@$clean'),
+      );
+
+      // 3. Búsqueda con expresión regular por si tiene @
+      user ??= await _mongo.usersCollection.findOne(
+        where.match('username', '^@?$clean\$'),
+      );
+
+      // 4. Si no coincide exacto, busca si empieza por ese texto
+      user ??= await _mongo.usersCollection.findOne(
+        where.match('username', '^@?$clean'),
+      );
 
       return user;
     } catch (e) {
@@ -112,7 +121,7 @@ class ChatController extends ChangeNotifier {
     final currentUsername = AppConfig.getCurrentUsername();
     if (currentUsername == null) return null;
 
-    final current = currentUsername.trim().toLowerCase();
+    final current = currentUsername.replaceAll('@', '').trim().toLowerCase();
     final cleanInput = targetUsername.replaceAll('@', '').trim().toLowerCase();
 
     if (cleanInput.isEmpty) {
@@ -125,18 +134,21 @@ class ChatController extends ChangeNotifier {
       throw Exception("El usuario '@$cleanInput' no fue encontrado. Verifica el nombre.");
     }
 
-    final target = (userDoc['username'] as String).toLowerCase();
+    final target = (userDoc['username'] as String).replaceAll('@', '').trim().toLowerCase();
 
     if (target == current) {
       throw Exception("No puedes abrir un chat contigo mismo.");
     }
 
     try {
-      // Buscar conversación existente entre ambos
+      if (!_mongo.isConnected) await _mongo.connect();
+
+      // Buscar conversación existente entre ambos (buscando combinaciones limpias y con @)
       final existingDoc = await _mongo.conversationsCollection.findOne(
         where
             .eq('type', 'direct')
-            .all('participants', [current, target]),
+            .oneFrom('participants', [current, '@$current'])
+            .oneFrom('participants', [target, '@$target']),
       );
 
       if (existingDoc != null) {
@@ -145,7 +157,7 @@ class ChatController extends ChangeNotifier {
         return conv;
       }
 
-      // Si no existe, crearla
+      // Si no existe, crearla SIEMPRE limpia sin @
       final newConv = ConversationModel(
         id: const Uuid().v4(),
         type: 'direct',
@@ -273,6 +285,11 @@ class ChatController extends ChangeNotifier {
       if (_activeConversationId != conversationId) return;
 
       try {
+        if (!_mongo.isConnected) {
+          await _mongo.connect();
+        }
+        if (!_mongo.isConnected) return;
+
         final cursor = _mongo.messagesCollection.find(
           where
               .eq('conversation_id', conversationId)
@@ -308,6 +325,12 @@ class ChatController extends ChangeNotifier {
     _currentMessages = [];
   }
 
+  /// Refresca manualmente los mensajes de la sala activa desde Atlas
+  Future<void> refreshActiveRoom() async {
+    if (_activeConversationId == null) return;
+    await _fetchRoomMessages(_activeConversationId!);
+  }
+
   /// Envía un nuevo mensaje a la conversación
   Future<void> sendMessage({
     required String conversationId,
@@ -318,6 +341,7 @@ class ChatController extends ChangeNotifier {
     final currentUsername = AppConfig.getCurrentUsername();
     if (currentUsername == null) return;
 
+    final cleanCurrent = currentUsername.replaceAll('@', '').trim().toLowerCase();
     final now = DateTime.now();
     final retentionDays = AppConfig.getRetentionDays();
     final expiresAt = now.add(Duration(days: retentionDays));
@@ -325,7 +349,7 @@ class ChatController extends ChangeNotifier {
     final message = MessageModel(
       id: const Uuid().v4(),
       conversationId: conversationId,
-      senderUsername: currentUsername.toLowerCase(),
+      senderUsername: cleanCurrent,
       content: content,
       type: type,
       mediaUrl: mediaUrl,
@@ -350,7 +374,7 @@ class ChatController extends ChangeNotifier {
         modify
             .set('updated_at', now.toIso8601String())
             .set('last_message', {
-          'sender': currentUsername.toLowerCase(),
+          'sender': cleanCurrent,
           'content': content.isNotEmpty ? content : (type == 'image' ? '[Foto]' : '[Archivo]'),
           'type': type,
           'timestamp': now.toIso8601String(),
@@ -361,6 +385,41 @@ class ChatController extends ChangeNotifier {
       loadConversations();
     } catch (e) {
       log("Error enviando mensaje: $e");
+    }
+  }
+
+  /// Vacía / borra todos los mensajes de una conversación completa sin eliminar el contacto
+  Future<void> clearConversationMessages(String conversationId) async {
+    try {
+      if (!_mongo.isConnected) await _mongo.connect();
+
+      // 1. Borrar todos los mensajes de esta conversación en MongoDB Atlas
+      await _mongo.messagesCollection.deleteMany(
+        where.eq('conversation_id', conversationId),
+      );
+
+      // 2. Limpiar el last_message de la conversación en Atlas (dejando participantes intactos)
+      await _mongo.conversationsCollection.update(
+        where.eq('_id', conversationId),
+        modify
+            .set('updated_at', DateTime.now().toIso8601String())
+            .unset('last_message'),
+      );
+
+      // 3. Borrar los mensajes del almacenamiento en caché local del teléfono
+      await _cache.clearCachedMessages(conversationId);
+
+      // 4. Si la sala está abierta actualmente, limpiar los mensajes en pantalla
+      if (_activeConversationId == conversationId) {
+        _currentMessages = [];
+        notifyListeners();
+      }
+
+      // 5. Recargar la lista de conversaciones
+      await loadConversations();
+    } catch (e) {
+      log("Error vaciando mensajes de la conversación: $e");
+      rethrow;
     }
   }
 

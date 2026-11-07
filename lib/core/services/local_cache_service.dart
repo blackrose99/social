@@ -94,6 +94,19 @@ class LocalCacheService {
     await mergeAndSaveMessages(conversationId, [message]);
   }
 
+  /// Elimina los mensajes cacheados de una conversación específica
+  Future<void> clearCachedMessages(String conversationId) async {
+    try {
+      final dir = await _getDir();
+      final file = _getMessagesFile(dir, conversationId);
+      if (await file.exists()) {
+        await file.delete();
+      }
+    } catch (e) {
+      log("Error borrando caché local de mensajes: $e");
+    }
+  }
+
   /// Carga las conversaciones guardadas en el teléfono
   Future<List<ConversationModel>> getCachedConversations() async {
     try {

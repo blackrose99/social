@@ -16,7 +16,7 @@ class HiddenAuthScreen extends StatefulWidget {
 }
 
 class _HiddenAuthScreenState extends State<HiddenAuthScreen> {
-  bool _isLogin = false; // Por defecto Crear Perfil para que sea lo primero que vea
+  bool _isLogin = true; // Por defecto Iniciar Sesión para acceder inmediatamente
   bool _isLoading = false;
   String? _errorMessage;
 
@@ -31,15 +31,16 @@ class _HiddenAuthScreenState extends State<HiddenAuthScreen> {
   }
 
   Future<void> _handleSubmit() async {
-    final username = _usernameController.text.trim().toLowerCase();
+    final rawUsername = _usernameController.text.trim();
+    final cleanUsername = rawUsername.replaceAll('@', '').trim().toLowerCase();
     final password = _passwordController.text.trim();
 
-    if (username.isEmpty || password.isEmpty) {
+    if (cleanUsername.isEmpty || password.isEmpty) {
       setState(() => _errorMessage = 'Por favor ingresa tu alias y contraseña.');
       return;
     }
 
-    if (username.length < 3) {
+    if (cleanUsername.length < 3) {
       setState(() => _errorMessage = 'El alias debe tener al menos 3 letras.');
       return;
     }
@@ -64,23 +65,29 @@ class _HiddenAuthScreenState extends State<HiddenAuthScreen> {
 
       if (_isLogin) {
         // INICIO DE SESIÓN
-        final userDoc = await usersCol.findOne({'username': username});
+        // Buscar de forma tolerante (limpio, con @ o insensible a mayúsculas)
+        var userDoc = await usersCol.findOne({'username': cleanUsername});
+        userDoc ??= await usersCol.findOne({'username': '@$cleanUsername'});
+        userDoc ??= await usersCol.findOne(
+          where.match('username', '^@?$cleanUsername\$'),
+        );
+
         if (userDoc == null) {
-          throw Exception("El alias '@$username' no está registrado. Puedes tocar arriba en 'Crear mi Perfil'.");
+          throw Exception("El alias '@$cleanUsername' no está registrado. Si no tienes cuenta, toca arriba en 'Crear Perfil'.");
         }
 
         if (userDoc['password_hash'] != passwordHash) {
-          throw Exception("Contraseña incorrecta para @$username.");
+          throw Exception("Contraseña incorrecta para @$cleanUsername.");
         }
 
-        await AppConfig.setCurrentUsername(username);
+        // Guardar SIEMPRE el username normalizado sin @
+        await AppConfig.setCurrentUsername(cleanUsername);
         if (!mounted) return;
         _goToChatList();
       } else {
         // REGISTRO DE NUEVO PERFIL (Evitar duplicados estrictamente)
-        final cleanUsername = username.replaceAll('@', '').trim().toLowerCase();
         final existing = await usersCol.findOne(
-          where.match('username', '^$cleanUsername\$'),
+          where.match('username', '^@?$cleanUsername\$'),
         );
         if (existing != null) {
           throw Exception("El alias '@$cleanUsername' ya existe y pertenece a otro usuario. Elige un nombre de usuario diferente.");
@@ -94,7 +101,8 @@ class _HiddenAuthScreenState extends State<HiddenAuthScreen> {
         );
 
         await usersCol.insert(newUser.toMap());
-        await AppConfig.setCurrentUsername(username);
+        // Guardar SIEMPRE el username normalizado sin @
+        await AppConfig.setCurrentUsername(cleanUsername);
 
         if (!mounted) return;
         _goToChatList();
@@ -167,7 +175,7 @@ class _HiddenAuthScreenState extends State<HiddenAuthScreen> {
               ),
               const SizedBox(height: 24),
 
-              // Selector Tabs: Crear Perfil vs Iniciar Sesión
+              // Selector Tabs: Iniciar Sesión vs Crear Perfil (Iniciar Sesión primero)
               Container(
                 decoration: BoxDecoration(
                   color: const Color(0xFF1E222B),
@@ -175,30 +183,6 @@ class _HiddenAuthScreenState extends State<HiddenAuthScreen> {
                 ),
                 child: Row(
                   children: [
-                    Expanded(
-                      child: GestureDetector(
-                        onTap: () => setState(() {
-                          _isLogin = false;
-                          _errorMessage = null;
-                        }),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                          decoration: BoxDecoration(
-                            color: !_isLogin ? Colors.amber.shade700 : Colors.transparent,
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Center(
-                            child: Text(
-                              'Crear Perfil',
-                              style: TextStyle(
-                                color: !_isLogin ? Colors.black : Colors.white70,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
                     Expanded(
                       child: GestureDetector(
                         onTap: () => setState(() {
@@ -216,6 +200,30 @@ class _HiddenAuthScreenState extends State<HiddenAuthScreen> {
                               'Iniciar Sesión',
                               style: TextStyle(
                                 color: _isLogin ? Colors.black : Colors.white70,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    Expanded(
+                      child: GestureDetector(
+                        onTap: () => setState(() {
+                          _isLogin = false;
+                          _errorMessage = null;
+                        }),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          decoration: BoxDecoration(
+                            color: !_isLogin ? Colors.amber.shade700 : Colors.transparent,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Center(
+                            child: Text(
+                              'Crear Perfil',
+                              style: TextStyle(
+                                color: !_isLogin ? Colors.black : Colors.white70,
                                 fontWeight: FontWeight.bold,
                               ),
                             ),

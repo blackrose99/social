@@ -67,14 +67,17 @@ class AppConfig {
   }
 
   static String? getCurrentUsername() {
-    return _prefs?.getString(_prefCurrentUsername);
+    final raw = _prefs?.getString(_prefCurrentUsername);
+    if (raw == null || raw.trim().isEmpty) return null;
+    return raw.replaceAll('@', '').trim().toLowerCase();
   }
 
   static Future<void> setCurrentUsername(String? username) async {
     if (username == null) {
       await _prefs?.remove(_prefCurrentUsername);
     } else {
-      await _prefs?.setString(_prefCurrentUsername, username);
+      final clean = username.replaceAll('@', '').trim().toLowerCase();
+      await _prefs?.setString(_prefCurrentUsername, clean);
     }
   }
 

@@ -57,6 +57,54 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
     super.dispose();
   }
 
+  Future<void> _confirmClearThisConversation() async {
+    final currentUsername = AppConfig.getCurrentUsername() ?? '';
+    final displayName = widget.conversation.getDisplayName(currentUsername);
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1E222B),
+        title: Text('¿Vaciar chat con $displayName?', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+        content: const Text(
+          'Se eliminarán todos los mensajes y archivos de esta sala, pero conservarás el contacto en tu lista.',
+          style: TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
+            onPressed: () => Navigator.pop(ctx, false),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.amber.shade700,
+              foregroundColor: Colors.black,
+            ),
+            child: const Text('Vaciar Chat', style: TextStyle(fontWeight: FontWeight.bold)),
+            onPressed: () => Navigator.pop(ctx, true),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm == true && mounted) {
+      try {
+        await context.read<ChatController>().clearConversationMessages(widget.conversation.id);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('✅ Chat vaciado. El contacto se conserva.')),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Error al vaciar chat: $e'), backgroundColor: Colors.red),
+          );
+        }
+      }
+    }
+  }
+
   void _scrollToBottom() {
     if (_scrollController.hasClients) {
       _scrollController.animateTo(
@@ -611,6 +659,28 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
               ),
             ],
           ),
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.refresh, color: Colors.white70),
+              tooltip: 'Actualizar mensajes',
+              onPressed: () async {
+                await context.read<ChatController>().refreshActiveRoom();
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Mensajes sincronizados'),
+                      duration: Duration(milliseconds: 900),
+                    ),
+                  );
+                }
+              },
+            ),
+            IconButton(
+              icon: const Icon(Icons.delete_sweep_outlined, color: Colors.amber),
+              tooltip: 'Vaciar conversación',
+              onPressed: _confirmClearThisConversation,
+            ),
+          ],
         ),
         body: Column(
           children: [

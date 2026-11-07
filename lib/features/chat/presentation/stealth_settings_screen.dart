@@ -7,6 +7,7 @@ import '../../../core/services/mongo_service.dart';
 import '../../../core/utils/hash_helper.dart';
 import '../../disguise/presentation/disguise_notes_screen.dart';
 import '../providers/chat_controller.dart';
+import 'chat_room_screen.dart';
 
 class StealthSettingsScreen extends StatefulWidget {
   const StealthSettingsScreen({super.key});
@@ -222,6 +223,38 @@ class _StealthSettingsScreenState extends State<StealthSettingsScreen> {
             SnackBar(content: Text('Error al eliminar: $e'), backgroundColor: Colors.red),
           );
         }
+      }
+    }
+  }
+
+  Future<void> _sendMessageToUser(String targetUsername) async {
+    final currentUsername = AppConfig.getCurrentUsername() ?? '';
+    final cleanTarget = targetUsername.replaceAll('@', '').trim().toLowerCase();
+    final cleanCurrent = currentUsername.replaceAll('@', '').trim().toLowerCase();
+
+    if (cleanTarget == cleanCurrent) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No puedes abrir un chat contigo mismo.')),
+      );
+      return;
+    }
+
+    try {
+      final controller = context.read<ChatController>();
+      final conv = await controller.getOrCreateDirectChat(cleanTarget);
+      if (conv != null && mounted) {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => ChatRoomScreen(conversation: conv),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error al abrir chat con @$cleanTarget: $e'), backgroundColor: Colors.red),
+        );
       }
     }
   }
@@ -604,6 +637,11 @@ class _StealthSettingsScreenState extends State<StealthSettingsScreen> {
                               trailing: Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
+                                  IconButton(
+                                    icon: const Icon(Icons.chat_bubble_outline, color: Colors.greenAccent, size: 20),
+                                    tooltip: 'Mandar mensaje',
+                                    onPressed: () => _sendMessageToUser(uName),
+                                  ),
                                   IconButton(
                                     icon: const Icon(Icons.key, color: Colors.amber, size: 20),
                                     tooltip: 'Cambiar contraseña',

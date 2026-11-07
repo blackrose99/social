@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../../../core/config/app_config.dart';
 import '../../../core/utils/hash_helper.dart';
 import '../../disguise/presentation/disguise_notes_screen.dart';
+import '../../auth/presentation/hidden_auth_screen.dart';
 import '../models/conversation_model.dart';
 import '../providers/chat_controller.dart';
 import 'chat_room_screen.dart';
@@ -47,6 +48,132 @@ class _ChatListScreenState extends State<ChatListScreen> {
       MaterialPageRoute(builder: (context) => const DisguiseNotesScreen()),
       (route) => false,
     );
+  }
+
+  Future<void> _confirmLogout() async {
+    final shouldLogout = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1E222B),
+        title: const Text('Cerrar Sesión', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+        content: const Text(
+          '¿Deseas cerrar tu sesión? Para volver a entrar deberás ingresar tu alias y contraseña.',
+          style: TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
+            onPressed: () => Navigator.pop(ctx, false),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.redAccent,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Cerrar Sesión', style: TextStyle(fontWeight: FontWeight.bold)),
+            onPressed: () => Navigator.pop(ctx, true),
+          ),
+        ],
+      ),
+    );
+
+    if (shouldLogout == true && mounted) {
+      await context.read<ChatController>().logout();
+      if (!mounted) return;
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (context) => const HiddenAuthScreen()),
+        (route) => false,
+      );
+    }
+  }
+
+  Future<void> _showConversationOptions(ConversationModel conv) async {
+    final currentUsername = AppConfig.getCurrentUsername() ?? '';
+    final displayName = conv.getDisplayName(currentUsername);
+
+    showModalBottomSheet(
+      backgroundColor: const Color(0xFF1E222B),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Opciones de $displayName',
+                style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 12),
+              ListTile(
+                leading: const Icon(Icons.delete_sweep_rounded, color: Colors.amber, size: 28),
+                title: const Text('Vaciar chat completo', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
+                subtitle: const Text(
+                  'Borra todos los mensajes y archivos de esta conversación sin perder el contacto de tu lista',
+                  style: TextStyle(color: Colors.white54, fontSize: 12),
+                ),
+                onTap: () async {
+                  Navigator.pop(ctx);
+                  _confirmClearConversation(conv);
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _confirmClearConversation(ConversationModel conv) async {
+    final currentUsername = AppConfig.getCurrentUsername() ?? '';
+    final displayName = conv.getDisplayName(currentUsername);
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1E222B),
+        title: Text('¿Vaciar chat con $displayName?', style: const TextStyle(color: Colors.white)),
+        content: const Text(
+          'Se eliminarán permanentemente todos los mensajes y archivos de este chat, pero el contacto se mantendrá en tu lista para seguir hablando.',
+          style: TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
+            onPressed: () => Navigator.pop(ctx, false),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.amber.shade700,
+              foregroundColor: Colors.black,
+            ),
+            child: const Text('Vaciar Chat', style: TextStyle(fontWeight: FontWeight.bold)),
+            onPressed: () => Navigator.pop(ctx, true),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm == true && mounted) {
+      try {
+        await context.read<ChatController>().clearConversationMessages(conv.id);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('✅ Chat vaciado exitosamente. El contacto se conserva.')),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Error al vaciar chat: $e'), backgroundColor: Colors.red),
+          );
+        }
+      }
+    }
   }
 
   Future<void> _openNewChatDialog() async {
@@ -115,6 +242,19 @@ class _ChatListScreenState extends State<ChatListScreen> {
           ),
           actions: [
             IconButton(
+              tooltip: 'Actualizar chats',
+              icon: const Icon(Icons.refresh, color: Colors.white70),
+              onPressed: () {
+                context.read<ChatController>().loadConversations();
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Actualizando conversaciones...'),
+                    duration: Duration(seconds: 1),
+                  ),
+                );
+              },
+            ),
+            IconButton(
               tooltip: 'Ajustes de sigilo',
               icon: const Icon(Icons.settings_outlined, color: Colors.white70),
               onPressed: () {
@@ -123,6 +263,11 @@ class _ChatListScreenState extends State<ChatListScreen> {
                   MaterialPageRoute(builder: (context) => const StealthSettingsScreen()),
                 );
               },
+            ),
+            IconButton(
+              tooltip: 'Cerrar sesión',
+              icon: const Icon(Icons.logout_rounded, color: Colors.redAccent),
+              onPressed: _confirmLogout,
             ),
             IconButton(
               tooltip: 'Bloqueo instantáneo',
@@ -288,6 +433,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
                       );
                       controller.loadConversations();
                     },
+                    onLongPress: () => _showConversationOptions(conv),
                   );
                 },
               ),

@@ -14,6 +14,9 @@ void main() async {
   // Inicializar configuraciones persistentes
   await AppConfig.init();
 
+  // Si la aplicación se cerró por completo, limpiar la sesión para requerir inicio de sesión
+  await AppConfig.setCurrentUsername(null);
+
   // Inicializar servicio de notificaciones locales discretas
   await NotificationService().init();
 
