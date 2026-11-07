@@ -82,7 +82,7 @@ class AppConfig {
   }
 
   static bool isStealthNotificationsEnabled() {
-    return _prefs?.getBool(_prefStealthNotifications) ?? true;
+    return _prefs?.getBool(_prefStealthNotifications) ?? false;
   }
 
   static Future<void> setStealthNotifications(bool enabled) async {

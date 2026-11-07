@@ -8,6 +8,8 @@ class MessageModel {
   final String? mediaUrl;
   final DateTime timestamp;
   final DateTime? expiresAt;
+  final bool isSeen;
+  final DateTime? seenAt;
 
   MessageModel({
     required this.id,
@@ -18,7 +20,35 @@ class MessageModel {
     this.mediaUrl,
     required this.timestamp,
     this.expiresAt,
+    this.isSeen = false,
+    this.seenAt,
   });
+
+  MessageModel copyWith({
+    String? id,
+    String? conversationId,
+    String? senderUsername,
+    String? content,
+    String? type,
+    String? mediaUrl,
+    DateTime? timestamp,
+    DateTime? expiresAt,
+    bool? isSeen,
+    DateTime? seenAt,
+  }) {
+    return MessageModel(
+      id: id ?? this.id,
+      conversationId: conversationId ?? this.conversationId,
+      senderUsername: senderUsername ?? this.senderUsername,
+      content: content ?? this.content,
+      type: type ?? this.type,
+      mediaUrl: mediaUrl ?? this.mediaUrl,
+      timestamp: timestamp ?? this.timestamp,
+      expiresAt: expiresAt ?? this.expiresAt,
+      isSeen: isSeen ?? this.isSeen,
+      seenAt: seenAt ?? this.seenAt,
+    );
+  }
 
   Map<String, dynamic> toMap() {
     return {
@@ -30,6 +60,8 @@ class MessageModel {
       'media_url': mediaUrl,
       'timestamp': timestamp.toIso8601String(),
       'expires_at': expiresAt?.toIso8601String(),
+      'is_seen': isSeen,
+      'seen_at': seenAt?.toIso8601String(),
     };
   }
 
@@ -43,6 +75,8 @@ class MessageModel {
       mediaUrl: map['media_url'],
       timestamp: DateTime.tryParse(map['timestamp'] ?? '') ?? DateTime.now(),
       expiresAt: DateTime.tryParse(map['expires_at'] ?? ''),
+      isSeen: map['is_seen'] == true,
+      seenAt: DateTime.tryParse(map['seen_at'] ?? ''),
     );
   }
 }

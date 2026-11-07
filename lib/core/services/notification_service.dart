@@ -27,16 +27,13 @@ class NotificationService {
       await _notificationsPlugin.initialize(
         settings: initSettings,
         onDidReceiveNotificationResponse: (NotificationResponse details) {
-          log("Notificación tocada: Abriendo SIEMPRE la pantalla de Notas (camuflaje)");
+          log("Notificación tocada: Abriendo pantalla");
           AppNavigator.openNotesDisguise();
         },
       );
 
       // Solicitar permisos en Android 13+
-      final androidImplementation = _notificationsPlugin
-          .resolvePlatformSpecificImplementation<
-              AndroidFlutterLocalNotificationsPlugin>();
-      await androidImplementation?.requestNotificationsPermission();
+      await requestPermission();
 
       _initialized = true;
     } catch (e) {
@@ -44,7 +41,19 @@ class NotificationService {
     }
   }
 
-  /// Muestra una notificación adaptada al modo sigilo o modo explícito
+  Future<bool> requestPermission() async {
+    try {
+      final androidImplementation = _notificationsPlugin
+          .resolvePlatformSpecificImplementation<
+              AndroidFlutterLocalNotificationsPlugin>();
+      final granted = await androidImplementation?.requestNotificationsPermission();
+      return granted ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Muestra una notificación con vibración y sonido
   Future<void> showNewMessageNotification({
     required String sender,
     required String messageContent,
@@ -52,31 +61,33 @@ class NotificationService {
   }) async {
     final bool isStealth = AppConfig.isStealthNotificationsEnabled();
 
-    // En modo sigilo parece una tarea rutinaria de sincronización del sistema
     final String title = isStealth
         ? "Sincronización del sistema"
-        : "Mensaje de @$sender";
+        : "💬 @$sender";
 
     final String body = isStealth
         ? "Notas sincronizadas correctamente con el almacenamiento."
         : messageContent;
 
-    const AndroidNotificationDetails androidDetails =
-        AndroidNotificationDetails(
-      'stealth_messages_channel',
-      'Alertas de Sincronización',
-      channelDescription: 'Canal de notificaciones del sistema',
-      importance: Importance.high,
+    final AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
+      'chat_messages_channel_v3',
+      'Mensajes Seguros',
+      channelDescription: 'Alertas en tiempo real de nuevos mensajes',
+      importance: Importance.max,
       priority: Priority.high,
+      playSound: true,
+      enableVibration: true,
       showWhen: true,
+      styleInformation: BigTextStyleInformation(body),
     );
 
-    const NotificationDetails platformDetails =
+    final NotificationDetails platformDetails =
         NotificationDetails(android: androidDetails);
 
     try {
+      final notifId = DateTime.now().millisecondsSinceEpoch.remainder(100000);
       await _notificationsPlugin.show(
-        id: DateTime.now().millisecond,
+        id: notifId,
         title: title,
         body: body,
         notificationDetails: platformDetails,

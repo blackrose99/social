@@ -63,13 +63,16 @@ class MongoService {
     }
   }
 
-  /// Crea índices para optimizar búsquedas y tiempos de respuesta
+  /// Crea índices para optimizar búsquedas y tiempos de respuesta instantáneos
   Future<void> setupIndexes() async {
     if (!isConnected) return;
     try {
       await usersCollection.createIndex(keys: {'username': 1}, unique: true);
       await messagesCollection.createIndex(keys: {'conversation_id': 1, 'timestamp': -1});
+      await messagesCollection.createIndex(keys: {'conversation_id': 1, 'is_seen': 1});
+      await messagesCollection.createIndex(keys: {'conversation_id': 1, 'sender_username': 1, 'is_seen': 1});
       await conversationsCollection.createIndex(keys: {'participants': 1});
+      await conversationsCollection.createIndex(keys: {'updated_at': -1});
     } catch (e) {
       log("Nota al crear índices: $e");
     }

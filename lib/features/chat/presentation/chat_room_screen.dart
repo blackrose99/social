@@ -748,12 +748,27 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
                               _buildMessageContent(msg, isMe),
 
                               const SizedBox(height: 3),
-                              Text(
-                                DateFormat('hh:mm a').format(msg.timestamp),
-                                style: TextStyle(
-                                  color: isMe ? Colors.black54 : Colors.white38,
-                                  fontSize: 10,
-                                ),
+                              Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(
+                                    DateFormat('hh:mm a').format(msg.timestamp),
+                                    style: TextStyle(
+                                      color: isMe ? Colors.black54 : Colors.white38,
+                                      fontSize: 10,
+                                    ),
+                                  ),
+                                  if (isMe) ...[
+                                    const SizedBox(width: 4),
+                                    Icon(
+                                      msg.isSeen ? Icons.done_all_rounded : Icons.check_rounded,
+                                      size: 15,
+                                      color: msg.isSeen
+                                          ? const Color(0xFF0D47A1)
+                                          : Colors.black45,
+                                    ),
+                                  ],
+                                ],
                               ),
                             ],
                           ),

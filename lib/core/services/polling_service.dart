@@ -12,16 +12,23 @@ class PollingService {
   PollingService._internal();
 
   Timer? _timer;
-  DateTime _lastCheckedTimestamp = DateTime.now();
+  DateTime _lastCheckedTimestamp = DateTime.now().subtract(const Duration(minutes: 5));
   bool _isPolling = false;
+  final Set<String> _notifiedMessageIds = {};
 
-  void startPolling({Duration interval = const Duration(seconds: 8)}) {
-    if (_isPolling) return;
+  void startPolling({Duration interval = const Duration(milliseconds: 2500)}) {
+    _timer?.cancel();
     _isPolling = true;
-    _lastCheckedTimestamp = DateTime.now();
 
     _timer = Timer.periodic(interval, (_) => _checkNewMessages());
-    log("PollingService iniciado con intervalo de ${interval.inSeconds}s");
+    log("PollingService iniciado con intervalo de ${interval.inMilliseconds}ms");
+  }
+
+  void restartPolling() {
+    _timer?.cancel();
+    _isPolling = false;
+    _lastCheckedTimestamp = DateTime.now().subtract(const Duration(minutes: 2));
+    startPolling(interval: const Duration(milliseconds: 2500));
   }
 
   void stopPolling() {
@@ -41,20 +48,42 @@ class PollingService {
     }
 
     try {
-      // Buscar mensajes recibidos más recientes que la última marca de tiempo
+      final cleanCurrent = currentUsername.replaceAll('@', '').trim().toLowerCase();
+
+      // 1. Obtener las conversaciones a las que pertenece el usuario
+      final convCursor = mongo.conversationsCollection.find(
+        where.oneFrom('participants', [cleanCurrent, '@$cleanCurrent']),
+      );
+      final myConvs = await convCursor.toList();
+      if (myConvs.isEmpty) return;
+
+      final myConvIds = myConvs.map((c) => c['_id']?.toString()).whereType<String>().toList();
+
+      // 2. Buscar mensajes nuevos en esas conversaciones enviados por otros usuarios
       final cursor = mongo.messagesCollection.find(
         where
+            .oneFrom('conversation_id', myConvIds)
             .gt('timestamp', _lastCheckedTimestamp.toIso8601String())
-            .ne('sender_username', currentUsername.toLowerCase()),
+            .ne('sender_username', cleanCurrent),
       );
 
       final newMessages = await cursor.toList();
 
       if (newMessages.isNotEmpty) {
-        log("Nuevos mensajes detectados en polling: ${newMessages.length}");
         for (final msg in newMessages) {
-          final sender = msg['sender_username'] ?? 'Desconocido';
-          final content = msg['content'] ?? (msg['type'] == 'image' ? '[Foto]' : '[Archivo]');
+          final msgId = msg['_id']?.toString() ?? '';
+          if (_notifiedMessageIds.contains(msgId)) continue;
+          _notifiedMessageIds.add(msgId);
+
+          final sender = msg['sender_username'] ?? 'Contacto';
+          String content = msg['content'] ?? '';
+          final type = msg['type'] ?? 'text';
+          if (content.isEmpty) {
+            if (type == 'image') content = '📷 Foto';
+            if (type == 'audio') content = '🎤 Nota de voz';
+            if (type == 'video') content = '🎬 Video';
+          }
+
           final convId = msg['conversation_id'];
 
           await NotificationService().showNewMessageNotification(

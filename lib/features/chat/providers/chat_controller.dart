@@ -28,12 +28,18 @@ class ChatController extends ChangeNotifier {
 
   StreamSubscription? _changeStreamSub;
   Timer? _activeRoomPollingTimer;
+  DateTime? _lastCleanupTime;
 
-  /// Limpia automáticamente de la base de datos mensajes y multimedia vencidos
+  /// Limpia automáticamente de la base de datos mensajes y multimedia vencidos (máximo una vez cada 15 min)
   Future<void> _cleanExpiredMessages() async {
+    final now = DateTime.now();
+    if (_lastCleanupTime != null && now.difference(_lastCleanupTime!).inMinutes < 15) {
+      return;
+    }
+    _lastCleanupTime = now;
     try {
       if (!_mongo.isConnected) return;
-      final nowStr = DateTime.now().toIso8601String();
+      final nowStr = now.toIso8601String();
       await _mongo.messagesCollection.deleteMany(
         where.lt('expires_at', nowStr),
       );
@@ -45,7 +51,7 @@ class ChatController extends ChangeNotifier {
     final currentUsername = AppConfig.getCurrentUsername();
     if (currentUsername == null || currentUsername.isEmpty) return;
 
-    // 1. Mostrar de inmediato desde caché persistente local
+    // 1. Mostrar de inmediato desde memoria/caché local
     final cached = await _cache.getCachedConversations();
     if (cached.isNotEmpty && _conversations.isEmpty) {
       _conversations = cached;
@@ -57,16 +63,17 @@ class ChatController extends ChangeNotifier {
         await _mongo.connect();
       }
 
-      // Limpiar vencidos en Atlas (Atlas actúa como puente temporal)
+      // Limpieza periódica no bloqueante
       _cleanExpiredMessages();
 
       final current = currentUsername.replaceAll('@', '').trim().toLowerCase();
 
-      // Buscar conversaciones donde el usuario participe (soporta limpio y con @ por compatibilidad)
+      // Buscar conversaciones donde el usuario participe optimizado
       final cursor = _mongo.conversationsCollection.find(
         where
             .oneFrom('participants', [current, '@$current'])
-            .sortBy('updated_at', descending: true),
+            .sortBy('updated_at', descending: true)
+            .limit(40),
       );
 
       final list = await cursor.toList();
@@ -233,24 +240,50 @@ class ChatController extends ChangeNotifier {
     try {
       if (!_mongo.isConnected) await _mongo.connect();
 
+      // Cargar los últimos 50 mensajes de forma ultrarrápida
       final cursor = _mongo.messagesCollection.find(
         where
             .eq('conversation_id', conversationId)
-            .sortBy('timestamp', descending: false),
+            .sortBy('timestamp', descending: true)
+            .limit(50),
       );
 
       final docs = await cursor.toList();
-      final atlasMsgs = docs.map((d) => MessageModel.fromMap(d)).toList();
+      final atlasMsgs = docs.reversed.map((d) => MessageModel.fromMap(d)).toList();
 
-      // Fusionar y persistir localmente en el teléfono
+      // Fusionar y persistir localmente en memoria y disco
       _currentMessages = await _cache.mergeAndSaveMessages(conversationId, atlasMsgs);
       notifyListeners();
+
+      // Marcar mensajes del remitente como leídos
+      markMessagesAsSeen(conversationId);
     } catch (e) {
       log("Error obteniendo mensajes de la sala: $e");
     }
   }
 
-  /// Inicia escucha reactiva continua (Change Streams + Polling de alta frecuencia)
+  /// Marca todos los mensajes recibidos en esta conversación como vistos / leídos (Doble Check)
+  Future<void> markMessagesAsSeen(String conversationId) async {
+    final currentUsername = AppConfig.getCurrentUsername();
+    if (currentUsername == null) return;
+    final cleanCurrent = currentUsername.replaceAll('@', '').trim().toLowerCase();
+
+    try {
+      if (!_mongo.isConnected) await _mongo.connect();
+
+      await _mongo.messagesCollection.updateMany(
+        where
+            .eq('conversation_id', conversationId)
+            .ne('sender_username', cleanCurrent)
+            .eq('is_seen', false),
+        modify
+            .set('is_seen', true)
+            .set('seen_at', DateTime.now().toIso8601String()),
+      );
+    } catch (_) {}
+  }
+
+  /// Inicia escucha reactiva continua (Polling de alta frecuencia sub-segundo: 650ms)
   void _startListeningRoomMessages(String conversationId) {
     _stopListeningRoomMessages();
 
@@ -273,6 +306,7 @@ class ChatController extends ChangeNotifier {
           if (!_currentMessages.any((m) => m.id == newMsg.id)) {
             _currentMessages = await _cache.mergeAndSaveMessages(conversationId, [newMsg]);
             notifyListeners();
+            markMessagesAsSeen(conversationId);
           }
         }
       }, onError: (_) {});
@@ -280,8 +314,8 @@ class ChatController extends ChangeNotifier {
       log("Change Stream aviso: $e");
     }
 
-    // 2. Polling ultra-fiable en primer plano (cada 1.5 segundos)
-    _activeRoomPollingTimer = Timer.periodic(const Duration(milliseconds: 1500), (_) async {
+    // 2. Polling ultra-rápido en primer plano (cada 650ms para sensación en tiempo real)
+    _activeRoomPollingTimer = Timer.periodic(const Duration(milliseconds: 650), (_) async {
       if (_activeConversationId != conversationId) return;
 
       try {
@@ -290,20 +324,44 @@ class ChatController extends ChangeNotifier {
         }
         if (!_mongo.isConnected) return;
 
+        // Traer los 30 mensajes más recientes con limit para consulta instantánea (<30ms)
         final cursor = _mongo.messagesCollection.find(
           where
               .eq('conversation_id', conversationId)
-              .sortBy('timestamp', descending: false),
+              .sortBy('timestamp', descending: true)
+              .limit(30),
         );
 
         final newDocs = await cursor.toList();
-        final atlasMsgs = newDocs.map((doc) => MessageModel.fromMap(doc)).toList();
+        final atlasMsgs = newDocs.reversed.map((doc) => MessageModel.fromMap(doc)).toList();
 
-        // Si hay mensajes nuevos en Atlas, agregarlos y guardarlos en caché del teléfono
-        final hasNew = atlasMsgs.any((m) => !_currentMessages.any((cm) => cm.id == m.id));
-        if (hasNew) {
+        // Detectar si hay mensajes nuevos O si cambió el estado de visto (doble check)
+        bool hasChanges = false;
+        if (atlasMsgs.length != _currentMessages.length) {
+          hasChanges = true;
+        } else {
+          for (final am in atlasMsgs) {
+            final match = _currentMessages.cast<MessageModel?>().firstWhere(
+                  (cm) => cm?.id == am.id,
+                  orElse: () => null,
+                );
+            if (match == null || match.isSeen != am.isSeen) {
+              hasChanges = true;
+              break;
+            }
+          }
+        }
+
+        if (hasChanges) {
           _currentMessages = await _cache.mergeAndSaveMessages(conversationId, atlasMsgs);
           notifyListeners();
+
+          // Si recibimos mensajes no vistos, marcarlos como vistos
+          final currentUsername = AppConfig.getCurrentUsername()?.replaceAll('@', '').trim().toLowerCase();
+          final hasUnseen = atlasMsgs.any((m) => m.senderUsername.toLowerCase() != currentUsername && !m.isSeen);
+          if (hasUnseen) {
+            markMessagesAsSeen(conversationId);
+          }
         }
       } catch (e) {
         log("Error en sala polling: $e");
@@ -355,33 +413,36 @@ class ChatController extends ChangeNotifier {
       mediaUrl: mediaUrl,
       timestamp: now,
       expiresAt: expiresAt,
+      isSeen: false,
     );
 
-    // Añadir localmente de inmediato para sensación instantánea y guardar en caché local
+    // Añadir a memoria localmente al instante para respuesta visual a 0ms
     _currentMessages.add(message);
-    await _cache.saveSingleMessage(conversationId, message);
     notifyListeners();
+
+    // Guardar en caché local en segundo plano
+    _cache.saveSingleMessage(conversationId, message);
 
     try {
       if (!_mongo.isConnected) await _mongo.connect();
 
-      // Insertar en colección de mensajes
-      await _mongo.messagesCollection.insert(message.toMap());
+      // Enviar a MongoDB Atlas en paralelo para máxima velocidad
+      await Future.wait([
+        _mongo.messagesCollection.insert(message.toMap()),
+        _mongo.conversationsCollection.update(
+          where.eq('_id', conversationId),
+          modify
+              .set('updated_at', now.toIso8601String())
+              .set('last_message', {
+            'sender': cleanCurrent,
+            'content': content.isNotEmpty ? content : (type == 'image' ? '[Foto]' : (type == 'audio' ? '[Audio]' : '[Video]')),
+            'type': type,
+            'timestamp': now.toIso8601String(),
+          }),
+        ),
+      ]);
 
-      // Actualizar última actividad de la conversación
-      await _mongo.conversationsCollection.update(
-        where.eq('_id', conversationId),
-        modify
-            .set('updated_at', now.toIso8601String())
-            .set('last_message', {
-          'sender': cleanCurrent,
-          'content': content.isNotEmpty ? content : (type == 'image' ? '[Foto]' : '[Archivo]'),
-          'type': type,
-          'timestamp': now.toIso8601String(),
-        }),
-      );
-
-      // Refrescar lista de chats
+      // Refrescar lista de chats en segundo plano
       loadConversations();
     } catch (e) {
       log("Error enviando mensaje: $e");

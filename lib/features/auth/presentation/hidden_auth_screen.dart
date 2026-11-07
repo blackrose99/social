@@ -4,6 +4,8 @@ import 'package:mongo_dart/mongo_dart.dart' hide State, Center;
 import 'package:uuid/uuid.dart';
 import '../../../core/config/app_config.dart';
 import '../../../core/services/mongo_service.dart';
+import '../../../core/services/notification_service.dart';
+import '../../../core/services/polling_service.dart';
 import '../../../core/utils/hash_helper.dart';
 import '../../chat/presentation/chat_list_screen.dart';
 import '../models/user_model.dart';
@@ -82,6 +84,8 @@ class _HiddenAuthScreenState extends State<HiddenAuthScreen> {
 
         // Guardar SIEMPRE el username normalizado sin @
         await AppConfig.setCurrentUsername(cleanUsername);
+        NotificationService().requestPermission();
+        PollingService().restartPolling();
         if (!mounted) return;
         _goToChatList();
       } else {
@@ -103,6 +107,8 @@ class _HiddenAuthScreenState extends State<HiddenAuthScreen> {
         await usersCol.insert(newUser.toMap());
         // Guardar SIEMPRE el username normalizado sin @
         await AppConfig.setCurrentUsername(cleanUsername);
+        NotificationService().requestPermission();
+        PollingService().restartPolling();
 
         if (!mounted) return;
         _goToChatList();
